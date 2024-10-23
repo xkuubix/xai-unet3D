@@ -12,6 +12,15 @@ from pytorch3dunet.unet3d.model import UNet3D
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 
+'''
+This file creates a simple 3D U-Net model and demonstrates how to use Captum to compute and visualize
+integrated gradients for the model's output. Maxpool layers in the model are updated to have a kernel size of 1x3x3,
+to imitate 2D pooling (to retain slice dimension in the intermediate feature maps).
+The model is trained on synthetic data with high intensity regions, and the integrated.
+'''
+
+
+
 # update MaxPool3d layers
 def update_maxpool3d_params(model, new_kernel_size, new_stride, new_padding):
     for name, module in model.named_children():
@@ -28,7 +37,7 @@ net = UNet3D(in_channels=1, out_channels=1, f_maps=32, final_sigmoid=True, layer
 new_kernel_size, new_stride, new_padding = (1, 3, 3), (1, 2, 2), (0, 1, 1)
 
 update_maxpool3d_params(net, new_kernel_size, new_stride, new_padding)
-net.eval();
+net.eval()
 
 
 # input_tensor = torch.randn((1, 1, 20, 120, 120))
@@ -132,11 +141,10 @@ def train_unet(model, data, targets, num_epochs=5, learning_rate=0.001):
 train_unet(unet.original_model, data, targets)
 
 
-
 # %%
-guided_gc = IntegratedGradients(unet, multiply_by_inputs=False)
+ig = IntegratedGradients(unet, multiply_by_inputs=False)
 unet.eval()
-attribution = guided_gc.attribute(input_tensor, n_steps=50)
+attribution = ig.attribute(input_tensor, n_steps=50)
 
 nrows, ncols = 5, 4
 fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 10))
