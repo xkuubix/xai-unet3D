@@ -1,7 +1,5 @@
 # %%
-from captum.attr import GuidedGradCam, IntegratedGradients
-from captum.attr import LayerGradCam, GuidedGradCam
-from captum.attr import visualization as viz
+from captum.attr import IntegratedGradients
 import sys
 import torch
 import torch.nn as nn
@@ -17,7 +15,8 @@ np.random.seed(42)
 This file creates a simple 3D U-Net model and demonstrates how to use Captum to compute and visualize
 integrated gradients for the model's output. Maxpool layers in the model are updated to have a kernel size of 1x3x3,
 to imitate 2D pooling (to retain slice dimension in the intermediate feature maps).
-The model is trained on synthetic data with high intensity regions, and the integrated.
+The model is trained on synthetic data with high intensity regions.
+
 '''
 
 
@@ -79,13 +78,10 @@ class Modified3DUNet(nn.Module):
         print(f"model_out shape: {model_out.shape}")
         print(f"selected_inds shape: {selected_inds.shape}")
         print(f"{(model_out * selected_inds).sum(dim=(2,3,4))=}")
+        # return (model_out * selected_inds).sum(dim=(2, 3, 4))  # [batch, num_classes]
         return (model_out * selected_inds).sum(dim=(0, 2, 3, 4))  # [batch, num_classes]
-
-
-
 unet = Modified3DUNet(net)
-# target_layer = unet.original_model.encoders[-1].basic_module[-1].conv
-# guided_gc = GuidedGradCam(unet, target_layer)
+
 
 # %%
 # Generate synthetic training data
@@ -139,11 +135,13 @@ def train_unet(model, data, targets, num_epochs=5, learning_rate=0.001):
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
 # Train the model
-train_unet(unet.original_model, data, targets)
+if 0:
+    train_unet(unet.original_model, data, targets)
 
 
 # %%
 ig = IntegratedGradients(unet, multiply_by_inputs=False)
+input_tensor.requires_grad = True
 unet.eval()
 attribution = ig.attribute(input_tensor, n_steps=50)
 
@@ -171,8 +169,6 @@ for i in range(attribution.shape[2]):
 plt.tight_layout()
 plt.show()
 
-
-
 # %%
 nrows, ncols = 5, 4
 fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 10))
@@ -180,8 +176,6 @@ for i in range(input_tensor.shape[2]):
     # Select the i-th slice along the depth axis
     slice_attr = input_tensor[0, 0, i, :, :].cpu().detach().numpy()
     slice_attr = np.expand_dims(slice_attr, axis=-1)
-
-
     row = i // ncols
     col = i % ncols
     ax = axes[row, col]
