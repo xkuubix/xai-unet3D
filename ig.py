@@ -11,6 +11,7 @@ sys.path.append('/home/jr_buler/unet3d-xai/pytorch-3dunet/')
 from pytorch3dunet.unet3d.model import UNet3D
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
+np.random.seed(42)
 
 '''
 This file creates a simple 3D U-Net model and demonstrates how to use Captum to compute and visualize
