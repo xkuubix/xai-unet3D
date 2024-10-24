@@ -10,6 +10,10 @@ from pytorch3dunet.unet3d.model import UNet3D
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
 np.random.seed(42)
+import logging
+# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARN)
+logger = logging.getLogger(__name__)
 
 '''
 This file creates a simple 3D U-Net model and demonstrates how to use Captum to compute and visualize
@@ -20,7 +24,6 @@ The model is trained on synthetic data with high intensity regions.
 Inplace call of activation functions was set to False (default was True) in the buildingblocks.py file
 in the pytorch3dunet package.
 '''
-
 
 
 # update MaxPool3d layers
@@ -40,8 +43,6 @@ new_kernel_size, new_stride, new_padding = (1, 3, 3), (1, 2, 2), (0, 1, 1)
 
 update_maxpool3d_params(net, new_kernel_size, new_stride, new_padding)
 net.eval()
-
-
 # input_tensor = torch.randn((1, 1, 20, 120, 120))
 # input_tensor = torch.ones((1, 1, 20, 120, 120))
 input_tensor = torch.zeros((1, 1, 20, 120, 120))
@@ -56,43 +57,43 @@ for h in range(input_tensor.shape[3]):  # Loop over height
         if abs(h - w) < thickness:
             input_tensor[:, :, slice_index, h, w] = 1
 
-print(input_tensor.shape)
+logger.info(f"input_tensor shape: {input_tensor.shape}")
 input_tensor.requires_grad = True
 #%%
 class Modified3DUNet(nn.Module):
     def __init__(self, original_model):
         super(Modified3DUNet, self).__init__()
         self.original_model = original_model
+        logger.info(f"Wrapped model: {self.original_model}")
 
     def forward(self, x):
         # Run the original forward pass
         model_out = self.original_model(x)
-        print(f"model_out shape: {model_out.shape}")
+        logger.info(f"model_out shape: {model_out.shape}")
         out_max = (model_out > 0.9).type(torch.LongTensor)  # Shape: batch x channel x slice x height x width >>> channel to tutaj na outpucie są klasy za sigmoidą (final_sigmoid = True (default))
+        if device.type == 'cuda':
+            out_max = out_max.cuda()
         selected_inds = torch.zeros_like(model_out).squeeze(1)  # Remove channel dimension (for scatter_)
-        print(f"selected_inds shape: {selected_inds.shape}")
-        print(f"out_max shape: {out_max.shape}")
+        logger.info(f"selected_inds shape: {selected_inds.shape}")
+        logger.info(f"model_out shape: {model_out.shape}")
         # Create a binary mask with 1 at predicted class locations
         selected_inds.scatter_(1, out_max.squeeze(1), 1)  # Scatter in dimension 1, using valid indices
-        print(f"selected_inds shape: {selected_inds.shape}")
+        logger.info(f"selected_inds shape: {selected_inds.shape}")
         # Element-wise multiplication of model output and the binary mask
         # and sum over spatial dimensions (slice, height, width)
-        print(f"model_out shape: {model_out.shape}")
-        print(f"selected_inds shape: {selected_inds.shape}")
-        print(f"{(model_out * selected_inds).sum(dim=(2,3,4))=}")
-        print(f"{(model_out * selected_inds).sum(dim=(2, 3, 4)).shape=}")
+        logger.info(f"{(model_out * selected_inds).sum(dim=(2,3,4))=}")
+        logger.info(f"{(model_out * selected_inds).sum(dim=(2, 3, 4)).shape=}")
         return (model_out * selected_inds).sum(dim=(2, 3, 4))  # [batch, num_classes]
 
-        # return (model_out * selected_inds).sum(dim=(0, 2, 3, 4))  # [batch, num_classes]
-
-
-
 unet = Modified3DUNet(net)
-# target_layer = unet.original_model.encoders[-1].basic_module[-1].conv
-# guided_gc = GuidedGradCam(unet, target_layer)
-
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") # gpu 24gb is not enough
+device = torch.device("cpu")
+logger.info(f"Device set to: {device}")
+unet.to(device)
+input_tensor = input_tensor.to(device)
 # %%
 # Generate synthetic training data
+
 def generate_synthetic_data(num_samples, shape, high_intensity_value=1, low_intensity_value=0):
     data = []
     targets = []
@@ -117,13 +118,6 @@ def generate_synthetic_data(num_samples, shape, high_intensity_value=1, low_inte
         targets.append(target)
     
     return torch.stack(data), torch.stack(targets)
-
-# Generate 10 samples of shape (1, 20, 120, 120)
-num_samples = 10
-shape = (1, 20, 120, 120)
-data, targets = generate_synthetic_data(num_samples, shape)
-
-# Define a simple training loop
 def train_unet(model, data, targets, num_epochs=5, learning_rate=0.001):
     criterion = nn.BCELoss()  # Binary Cross Entropy Loss
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -141,50 +135,47 @@ def train_unet(model, data, targets, num_epochs=5, learning_rate=0.001):
         optimizer.step()
         
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
-
-# Train the model
 if 0:
+# Generate 10 samples of shape (1, 20, 120, 120)
+    num_samples = 10
+    shape = (1, 20, 120, 120)
+    data, targets = generate_synthetic_data(num_samples, shape)
+    data = data.to(device)
+    targets = targets.to(device)
+    # Define a simple training loop
+    # Train the model
     train_unet(unet.original_model, data, targets)
-
-
 # %%
 unet.eval()
-
-# target_layer = unet.original_model.encoders[-1].basic_module[-1].conv
-# here 
-target_layer = unet.original_model.encoders[1].basic_module[0].conv
-layer_= LayerIntegratedGradients(unet, target_layer)
-
-attribution = layer_.attribute(input_tensor, target=0)
-# average for all feature map channels
-attribution = attribution.mean(dim=1, keepdim=True)
-
-nrows, ncols = 5, 4
-fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 10))
-
-max_attr = attribution.flatten().max()
-min_attr = attribution.flatten().min()
-
-for i in range(attribution.shape[2]):
-    # Select the i-th slice along the depth axis
-    slice_attr = attribution[0, 0, i, :, :].cpu().detach().numpy()
-    slice_attr = np.expand_dims(slice_attr, axis=-1)
-    print(f"slice {i}", end=':\t')
-    print(min(slice_attr.flatten()), end='\t')
-    print(max(slice_attr.flatten()), end='\t')
-    print(slice_attr.flatten().mean())
-    row = i // ncols
-    col = i % ncols
-    ax = axes[row, col]
-    axes[row, col].imshow(slice_attr, cmap='coolwarm')#, vmin=min_attr, vmax=max_attr)
-    axes[row, col].axis('off')
-    axes[row, col].set_title(f'slice no. {i}')
-plt.tight_layout()
-plt.show()
-
-# %%
+target_layers = [encoder.basic_module[-1].conv for encoder in unet.original_model.encoders]
 
 
+
+for i, target_layer in enumerate(target_layers):
+    layer_= LayerIntegratedGradients(unet, target_layer)
+    attribution = layer_.attribute(input_tensor, target=0)
+    # attribution = attribution.mean(dim=1, keepdim=True)
+    attribution, _ = attribution.max(dim=1, keepdim=True)
+
+    nrows, ncols = 5, 4
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 10))
+
+    # max_attr = attribution.flatten().max()
+    # min_attr = attribution.flatten().min()
+
+    for j in range(attribution.shape[2]):
+        # Select the i-th slice along the depth axis
+        slice_attr = attribution[0, 0, j, :, :].cpu().detach().numpy()
+        slice_attr = np.expand_dims(slice_attr, axis=-1)
+        logger.info(f"slice {j}:\t{min(slice_attr.flatten())}\t{max(slice_attr.flatten())}\t{slice_attr.flatten().mean()}")
+        ROW, COL = j // ncols, j % ncols
+        ax = axes[ROW, COL]
+        axes[ROW, COL].imshow(slice_attr, cmap='coolwarm')#, vmin=min_attr, vmax=max_attr)
+        axes[ROW, COL].axis('off')
+        axes[ROW, COL].set_title(f'slice no. {j}')
+    fig.suptitle(f"Encoder no. {i} last conv layer")
+    plt.tight_layout()
+    plt.show()
 # %%
 nrows, ncols = 5, 4
 fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 10))
