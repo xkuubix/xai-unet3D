@@ -1,6 +1,5 @@
 /pytorch-3dunet/
 /__pycache__/
-/.vscode/
 
 # skip large files
 *.pytorch
